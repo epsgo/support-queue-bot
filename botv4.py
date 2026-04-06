@@ -81,7 +81,7 @@ CALL_REPLY = {
 
 CLOSE_KEYWORDS = [
     "done", "all done", "have a good day", "stay safe", "ready", "shift started", "safe trip", "fixed your violation",
-    "fixed", "added", "marked", "added new shipping", "added the load", "log been set", "have a good trip",
+    "fixed", "added", "marked", "added new shipping", "added the load", "log been set",
     "have a nice day", "have a good rest", "updated pickup time", "started the shift", "have a nice trip",
     "have a good one", "have a great day", "fixed your log", "made a split", "made a cycle reset",
     "violations fixed", "fixed violations", "time added", "BOL added", "added some time", "have a safe trip", 
@@ -459,15 +459,6 @@ async def discord_worker():
 
         await asyncio.sleep(10)
 
-        # try:
-        #     await send_to_discord(text)
-        #     await asyncio.sleep(5) 
-        # except Exception as e:
-        #     print(f"[{datetime.utcnow()}] Worker error: {e}")
-        #     await asyncio.sleep(15)
-        # finally:
-        #     discord_queue.task_done()
-
 async def main():
     global session
     connector = aiohttp.TCPConnector(limit=10) 
@@ -479,7 +470,6 @@ async def main():
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
-        print("Webhook cleared")
         await dp.start_polling(bot)
     except Exception as e:
         print(f"[{datetime.utcnow()}] Critical polling error: {e}")
