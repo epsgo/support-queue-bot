@@ -183,6 +183,12 @@ async def send_to_discord(text: str):
                     await asyncio.sleep(retry_after)
                     continue
 
+                if response.status >= 500:
+                    error_text = await response.text()
+                    print(f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}")
+                    await asyncio.sleep(10)
+                    continue
+
                 if response.status >= 400:
                     error_text = await response.text()
                     print(f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}")
