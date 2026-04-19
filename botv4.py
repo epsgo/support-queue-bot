@@ -19,6 +19,8 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 admin_raw = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = {int(i.strip()) for i in admin_raw.split(",") if i.strip()}
+dev_raw = os.getenv("DEV_IDS", "")
+DEV_IDS = {int(i.strip()) for i in dev_raw.split(",") if i.strip()}
 
 session = None
 discord_queue = Queue()
@@ -157,6 +159,13 @@ def get_reply(lang: str, reply_dict: dict) -> str:
 bot = Bot(token=TG_TOKEN)
 dp = Dispatcher()
 
+async def notify_devs(text: str):
+    for dev_id in DEV_IDS:
+        try:
+            await bot.send_message(dev_id, text)
+        except Exception as e:
+            print(f"[{datetime.utcnow()}] Failed to notify dev {dev_id}: {e}")
+
 async def send_to_discord(text: str):
     global session
     if session is None or session.closed:
@@ -185,17 +194,23 @@ async def send_to_discord(text: str):
 
                 if response.status >= 500:
                     error_text = await response.text()
-                    print(f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}")
+                    msg = f"[{datetime.utcnow()}] Discord Error {response.status} (attempt {attempt+1}/3): {error_text}"
+                    print(msg)
+                    await notify_devs(f"⚠️ {msg}")
                     await asyncio.sleep(10)
                     continue
 
                 if response.status >= 400:
                     error_text = await response.text()
-                    print(f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}")
+                    msg = f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}"
+                    print(msg)
+                    await notify_devs(f"❌ {msg}")
                     return
 
         except Exception as e:
-            print(f"[{datetime.utcnow()}] Connection Error: {e}")
+            msg = f"[{datetime.utcnow()}] Connection Error (attempt {attempt+1}/3): {e}"
+            print(msg)
+            await notify_devs(f"⚠️ {msg}")
             await asyncio.sleep(10)
 
 @dp.callback_query()
@@ -461,7 +476,9 @@ async def discord_worker():
         try:
             await send_to_discord(text)
         except Exception as e:
-            print(f"[{datetime.utcnow()}] Worker error: {e}")
+            msg = f"[{datetime.utcnow()}] Worker error: {e}"
+            print(msg)
+            await notify_devs(f"❌ {msg}")
 
         await asyncio.sleep(10)
 
@@ -478,7 +495,9 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     except Exception as e:
-        print(f"[{datetime.utcnow()}] Critical polling error: {e}")
+        msg = f"[{datetime.utcnow()}] Critical polling error: {e}"
+        print(msg)
+        await notify_devs(f"🚨 {msg}")
     finally:
         monitor_task.cancel()
         worker_task.cancel()
