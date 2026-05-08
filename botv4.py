@@ -511,6 +511,12 @@ async def on_message(msg: types.Message):
             return
         now = datetime.utcnow()
 
+        # Отправляем приветствие сразу
+        if is_call:
+            await msg.answer(get_reply(lang, CALL_REPLY))
+        else:
+            await msg.answer(get_reply(lang, AUTO_REPLY))
+
         if chat_id in recently_closed:
             closed_at = recently_closed[chat_id]
 
@@ -532,11 +538,6 @@ async def on_message(msg: types.Message):
             "opened_at": now,
             "notifications_sent": [],
         }
-
-        if is_call:
-            await msg.answer(get_reply(lang, CALL_REPLY))
-        else:
-            await msg.answer(get_reply(lang, AUTO_REPLY))
         
         await discord_queue.put(msg.chat.title)
 
