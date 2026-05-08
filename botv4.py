@@ -173,16 +173,17 @@ async def notify_devs(text: str):
 async def send_to_fallback_chat(text: str):
     """Отправка сообщения в fallback Telegram группу"""
     if FALLBACK_CHAT_ID == 0:
-        print(f"[{datetime.utcnow()}] FALLBACK_CHAT_ID not configured")
-        await notify_devs(f"❌ FALLBACK_CHAT_ID not configured")
+        error_msg = f"[{datetime.utcnow()}] ❌ FALLBACK_CHAT_ID not configured"
+        print(error_msg)
+        await notify_devs(error_msg)
         return
     
     try:
         await bot.send_message(FALLBACK_CHAT_ID, f"{text}")
-        print(f"[{datetime.utcnow()}] Message sent to fallback chat: {text}")
+        print(f"[{datetime.utcnow()}] ✅ Message sent to fallback chat")
     except Exception as e:
-        error_msg = f"❌ Failed to send to fallback chat: {e}"
-        print(f"[{datetime.utcnow()}] {error_msg}")
+        error_msg = f"[{datetime.utcnow()}] ❌ Failed to send to fallback chat: {e}"
+        print(error_msg)
         await notify_devs(error_msg)
 
 async def send_to_discord(text: str):
