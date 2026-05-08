@@ -208,6 +208,8 @@ async def send_to_discord(text: str):
         session = aiohttp.ClientSession(connector=connector)
     
     success = False
+    last_error = None
+    
     for attempt in range(3):  
         try:
             async with session.post(DISCORD_WEBHOOK, json={"content": text}, timeout=10) as response:
@@ -238,56 +240,80 @@ async def send_to_discord(text: str):
                     continue
 
                 if response.status == 503:
-                    discord_503_count += 1
                     discord_last_failure_time = datetime.utcnow()
                     error_text = await response.text()
-                    msg = f"[{datetime.utcnow()}] Discord 503 Error (count: {discord_503_count}/3, attempt {attempt+1}/3): {error_text}"
+                    last_error = f"503 Error: {error_text}"
+                    msg = f"[{datetime.utcnow()}] Discord 503 Error (attempt {attempt+1}/3): {error_text}"
                     print(msg)
-                    await notify_devs(f"⚠️ {msg}")
                     
-                    # Если получили 3 ошибки 503 подряд - переключаемся на fallback
-                    if discord_503_count >= 3:
-                        discord_fallback_mode = True
-                        fallback_msg = "🚨 Discord недоступен (3x 503 errors). Переключение на Telegram fallback режим."
-                        print(f"[{datetime.utcnow()}] {fallback_msg}")
-                        await notify_devs(fallback_msg)
-                        await send_to_fallback_chat(text)
-                        return
-                    
-                    await asyncio.sleep(10)
-                    continue
+                    if attempt < 2:  # Не последняя попытка
+                        await asyncio.sleep(15)
+                        continue
+                    else:  # Последняя попытка
+                        discord_503_count += 1
+                        await notify_devs(f"⚠️ {msg} (count: {discord_503_count}/3)")
+                        
+                        # Если получили 3 ошибки 503 подряд - переключаемся на fallback
+                        if discord_503_count >= 3:
+                            discord_fallback_mode = True
+                            fallback_msg = "🚨 Discord недоступен (3x 503 errors). Переключение на Telegram fallback режим."
+                            print(f"[{datetime.utcnow()}] {fallback_msg}")
+                            await notify_devs(fallback_msg)
+                        break
 
                 if response.status >= 500:
                     discord_last_failure_time = datetime.utcnow()
                     error_text = await response.text()
+                    last_error = f"{response.status} Error: {error_text}"
                     msg = f"[{datetime.utcnow()}] Discord Error {response.status} (attempt {attempt+1}/3): {error_text}"
                     print(msg)
-                    await notify_devs(f"⚠️ {msg}")
-                    await asyncio.sleep(10)
-                    continue
+                    
+                    if attempt < 2:  # Не последняя попытка
+                        await asyncio.sleep(15)
+                        continue
+                    else:  # Последняя попытка
+                        await notify_devs(f"⚠️ {msg}")
+                        break
 
                 if response.status >= 400:
                     discord_last_failure_time = datetime.utcnow()
                     error_text = await response.text()
+                    last_error = f"{response.status} Error: {error_text}"
                     msg = f"[{datetime.utcnow()}] Discord Error {response.status}: {error_text}"
                     print(msg)
                     await notify_devs(f"❌ {msg}")
-                    # После 3 попыток с ошибкой 4xx - отправляем в fallback
-                    if attempt == 2:
-                        await send_to_fallback_chat(text)
-                    return
+                    break
 
+        except asyncio.TimeoutError:
+            discord_last_failure_time = datetime.utcnow()
+            last_error = "Timeout Error"
+            msg = f"[{datetime.utcnow()}] Discord Timeout (attempt {attempt+1}/3)"
+            print(msg)
+            
+            if attempt < 2:
+                await asyncio.sleep(15)
+                continue
+            else:
+                await notify_devs(f"⚠️ {msg}")
+                break
+                
         except Exception as e:
             discord_last_failure_time = datetime.utcnow()
+            last_error = str(e)
             msg = f"[{datetime.utcnow()}] Connection Error (attempt {attempt+1}/3): {e}"
             print(msg)
-            await notify_devs(f"⚠️ {msg}")
-            await asyncio.sleep(10)
+            
+            if attempt < 2:
+                await asyncio.sleep(15)
+                continue
+            else:
+                await notify_devs(f"⚠️ {msg}")
+                break
     
     # Если после 3 попыток не удалось отправить - отправляем в fallback
     if not success:
         discord_last_failure_time = datetime.utcnow()
-        fallback_msg = "🚨 Discord недоступен после 3 попыток. Отправка в Telegram fallback."
+        fallback_msg = f"🚨 Discord недоступен после 3 попыток ({last_error}). Отправка в Telegram fallback."
         print(f"[{datetime.utcnow()}] {fallback_msg}")
         await notify_devs(fallback_msg)
         await send_to_fallback_chat(text)
