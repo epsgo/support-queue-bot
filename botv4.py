@@ -456,6 +456,11 @@ async def on_message(msg: types.Message):
         return
 
     chat_id = msg.chat.id
+    
+    # Игнорируем сообщения из fallback чата
+    if chat_id == FALLBACK_CHAT_ID:
+        return
+    
     chat_title = msg.chat.title or "No Title"
     text = msg.text or msg.caption or ""
     is_media = bool(msg.photo or msg.voice or msg.document 
