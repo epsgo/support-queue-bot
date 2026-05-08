@@ -537,16 +537,13 @@ async def on_message(msg: types.Message):
             return
         now = datetime.utcnow()
 
-        # Отправляем приветствие сразу
-        if is_call:
-            await msg.answer(get_reply(lang, CALL_REPLY))
-        else:
-            await msg.answer(get_reply(lang, AUTO_REPLY))
-
+        # Проверяем recently_closed - если задача была недавно закрыта (в течение 30 минут)
         if chat_id in recently_closed:
             closed_at = recently_closed[chat_id]
 
             if now - closed_at < timedelta(minutes=30):
+                # Повторный запрос в течение 30 минут после закрытия - НЕ отвечаем в группе
+                # Только отправляем уведомление в Discord
                 open_tasks[chat_id] = {
                     "title": chat_title,
                     "opened_at": now,
@@ -557,7 +554,14 @@ async def on_message(msg: types.Message):
                     pending_media_checks.pop(chat_id, None)
                 return
             else:
+                # Прошло больше 30 минут - удаляем из recently_closed
                 del recently_closed[chat_id]
+
+        # Первый запрос или прошло больше 30 минут после закрытия - отвечаем в группе
+        if is_call:
+            await msg.answer(get_reply(lang, CALL_REPLY))
+        else:
+            await msg.answer(get_reply(lang, AUTO_REPLY))
 
         open_tasks[chat_id] = {
             "title": chat_title,
