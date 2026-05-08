@@ -21,7 +21,7 @@ admin_raw = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = {int(i.strip()) for i in admin_raw.split(",") if i.strip()}
 dev_raw = os.getenv("DEV_IDS", "")
 DEV_IDS = {int(i.strip()) for i in dev_raw.split(",") if i.strip()}
-FALLBACK_CHAT_ID = int(os.getenv("FALLBACK_CHAT_ID", "-5005950861"))
+FALLBACK_CHAT_ID = int(os.getenv("FALLBACK_CHAT_ID", "-5131815063"))
 
 session = None
 discord_queue = Queue()
