@@ -1,10 +1,13 @@
 import asyncio
+import email
+import imaplib
 import os
 import random
 import aiohttp
 import pandas as pd
 import re
 from dotenv import load_dotenv
+from email.header import decode_header
 from lingua import Language, LanguageDetectorBuilder
 from aiogram import Bot, Dispatcher, types
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -22,6 +25,14 @@ ADMIN_IDS = {int(i.strip()) for i in admin_raw.split(",") if i.strip()}
 dev_raw = os.getenv("DEV_IDS", "")
 DEV_IDS = {int(i.strip()) for i in dev_raw.split(",") if i.strip()}
 FALLBACK_CHAT_ID = int(os.getenv("FALLBACK_CHAT_ID", "-5131815063"))
+FALLBACK_ENABLED = os.getenv("FALLBACK", "true").strip().lower() != "false"
+
+GMAIL_USER = os.getenv("GMAIL")
+GMAIL_APP_PASSWORD = (os.getenv("APP_PASSWORD") or "").replace(" ", "")
+GMAIL_POLL_INTERVAL = int(os.getenv("GMAIL_POLL_INTERVAL", "30"))
+GMAIL_IMAP_HOST = "imap.gmail.com"
+GMAIL_IMAP_PORT = 993
+GMAIL_SUBJECT_PREFIX = "Violation"
 
 session = None
 discord_queue = Queue()
@@ -171,13 +182,16 @@ async def notify_devs(text: str):
             print(f"[{datetime.utcnow()}] Failed to notify dev {dev_id}: {e}")
 
 async def send_to_fallback_chat(text: str):
-    """Отправка сообщения в fallback Telegram группу"""
+    if not FALLBACK_ENABLED:
+        print(f"[{datetime.utcnow()}] Fallback disabled (FALLBACK=false), skipping: {text}")
+        return
+
     if FALLBACK_CHAT_ID == 0:
         error_msg = f"[{datetime.utcnow()}] ❌ FALLBACK_CHAT_ID not configured"
         print(error_msg)
         await notify_devs(error_msg)
         return
-    
+
     try:
         await bot.send_message(FALLBACK_CHAT_ID, f"{text}")
         print(f"[{datetime.utcnow()}] ✅ Message sent to fallback chat")
@@ -188,18 +202,13 @@ async def send_to_fallback_chat(text: str):
 
 async def send_to_discord(text: str):
     global session, discord_503_count, discord_fallback_mode, discord_last_failure_time
-    
-    # Если включен fallback режим, проверяем прошел ли час
+
     if discord_fallback_mode:
         now = datetime.utcnow()
         if discord_last_failure_time and (now - discord_last_failure_time) >= timedelta(hours=1):
-            # Прошел час, пробуем снова подключиться к Discord
-            print(f"[{now}] Прошел час с последней ошибки. Пробуем подключиться к Discord...")
-            # Временно отключаем fallback для проверки
-            temp_fallback = discord_fallback_mode
+            print(f"[{now}] Discord fallback retry window opened, re-attempting webhook")
             discord_fallback_mode = False
         else:
-            # Час еще не прошел, отправляем в Telegram
             await send_to_fallback_chat(text)
             return
     
@@ -210,12 +219,11 @@ async def send_to_discord(text: str):
     success = False
     last_error = None
     
-    for attempt in range(3):  
+    for attempt in range(3):
         try:
             async with session.post(DISCORD_WEBHOOK, json={"content": text}, timeout=10) as response:
 
                 if response.status == 204:
-                    # Успешная отправка - сбрасываем все счетчики
                     discord_503_count = 0
                     discord_last_failure_time = None
                     if discord_fallback_mode:
@@ -245,15 +253,14 @@ async def send_to_discord(text: str):
                     last_error = f"503 Error: {error_text}"
                     msg = f"[{datetime.utcnow()}] Discord 503 Error (attempt {attempt+1}/3): {error_text}"
                     print(msg)
-                    
-                    if attempt < 2:  # Не последняя попытка
+
+                    if attempt < 2:
                         await asyncio.sleep(15)
                         continue
-                    else:  # Последняя попытка
+                    else:
                         discord_503_count += 1
                         await notify_devs(f"⚠️ {msg} (count: {discord_503_count}/3)")
-                        
-                        # Если получили 3 ошибки 503 подряд - переключаемся на fallback
+
                         if discord_503_count >= 3:
                             discord_fallback_mode = True
                             fallback_msg = "🚨 Discord недоступен (3x 503 errors). Переключение на Telegram fallback режим."
@@ -267,11 +274,11 @@ async def send_to_discord(text: str):
                     last_error = f"{response.status} Error: {error_text}"
                     msg = f"[{datetime.utcnow()}] Discord Error {response.status} (attempt {attempt+1}/3): {error_text}"
                     print(msg)
-                    
-                    if attempt < 2:  # Не последняя попытка
+
+                    if attempt < 2:
                         await asyncio.sleep(15)
                         continue
-                    else:  # Последняя попытка
+                    else:
                         await notify_devs(f"⚠️ {msg}")
                         break
 
@@ -310,7 +317,6 @@ async def send_to_discord(text: str):
                 await notify_devs(f"⚠️ {msg}")
                 break
     
-    # Если после 3 попыток не удалось отправить - отправляем в fallback
     if not success:
         discord_last_failure_time = datetime.utcnow()
         fallback_msg = f"🚨 Discord недоступен после 3 попыток ({last_error}). Отправка в Telegram fallback."
@@ -483,8 +489,7 @@ async def on_message(msg: types.Message):
         return
 
     chat_id = msg.chat.id
-    
-    # Игнорируем сообщения из fallback чата
+
     if chat_id == FALLBACK_CHAT_ID:
         return
     
@@ -537,13 +542,10 @@ async def on_message(msg: types.Message):
             return
         now = datetime.utcnow()
 
-        # Проверяем recently_closed - если задача была недавно закрыта (в течение 30 минут)
         if chat_id in recently_closed:
             closed_at = recently_closed[chat_id]
 
             if now - closed_at < timedelta(minutes=30):
-                # Повторный запрос в течение 30 минут после закрытия - НЕ отвечаем в группе
-                # Только отправляем уведомление в Discord
                 open_tasks[chat_id] = {
                     "title": chat_title,
                     "opened_at": now,
@@ -554,10 +556,8 @@ async def on_message(msg: types.Message):
                     pending_media_checks.pop(chat_id, None)
                 return
             else:
-                # Прошло больше 30 минут - удаляем из recently_closed
                 del recently_closed[chat_id]
 
-        # Первый запрос или прошло больше 30 минут после закрытия - отвечаем в группе
         if is_call:
             await msg.answer(get_reply(lang, CALL_REPLY))
         else:
@@ -637,14 +637,93 @@ async def discord_worker():
 
         await asyncio.sleep(10)
 
+def _decode_subject(raw: str) -> str:
+    if not raw:
+        return "(no subject)"
+    parts = []
+    for chunk, enc in decode_header(raw):
+        if isinstance(chunk, bytes):
+            try:
+                parts.append(chunk.decode(enc or "utf-8", errors="replace"))
+            except (LookupError, TypeError):
+                parts.append(chunk.decode("utf-8", errors="replace"))
+        else:
+            parts.append(chunk)
+    return ("".join(parts).strip() or "(no subject)")
+
+def _fetch_unseen_emails_sync():
+    results = []
+    imap = imaplib.IMAP4_SSL(GMAIL_IMAP_HOST, GMAIL_IMAP_PORT)
+    try:
+        imap.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        imap.select("INBOX")
+        typ, data = imap.uid("search", None, "UNSEEN", "SUBJECT", f"\"{GMAIL_SUBJECT_PREFIX}\"")
+        if typ != "OK" or not data or not data[0]:
+            return results
+        uids = data[0].split()
+        prefix_lower = GMAIL_SUBJECT_PREFIX.lower()
+        for uid_bytes in uids:
+            uid_str = uid_bytes.decode()
+            typ, msg_data = imap.uid("fetch", uid_str, "(BODY.PEEK[HEADER.FIELDS (SUBJECT)])")
+            if typ != "OK":
+                continue
+            subject = "(no subject)"
+            for part in msg_data:
+                if isinstance(part, tuple) and len(part) >= 2:
+                    header_msg = email.message_from_bytes(part[1])
+                    subject = _decode_subject(header_msg.get("Subject", ""))
+                    break
+            if not subject.lstrip().lower().startswith(prefix_lower):
+                continue
+            results.append((int(uid_str), subject))
+            imap.uid("store", uid_str, "+FLAGS", "\\Seen")
+    finally:
+        try:
+            imap.close()
+        except Exception:
+            pass
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    return results
+
+async def gmail_poller():
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        print(f"[{datetime.utcnow()}] Gmail poller disabled (GMAIL/APP_PASSWORD not set)")
+        return
+    print(f"[{datetime.utcnow()}] Gmail poller started for {GMAIL_USER}")
+    while True:
+        try:
+            emails = await asyncio.to_thread(_fetch_unseen_emails_sync)
+            for uid, subject in emails:
+                if uid in open_tasks:
+                    continue
+                now = datetime.utcnow()
+                title = f"{subject}"
+                open_tasks[uid] = {
+                    "title": title,
+                    "opened_at": now,
+                    "notifications_sent": [],
+                }
+                await discord_queue.put(f"{title}")
+                print(f"[{now}] Gmail violation queued: uid={uid} subject={subject!r}")
+        except Exception as e:
+            err = f"[{datetime.utcnow()}] Gmail poller error: {type(e).__name__}: {e}"
+            print(err)
+            await notify_devs(f"⚠️ {err}")
+        await asyncio.sleep(GMAIL_POLL_INTERVAL)
+
 async def main():
     global session
-    connector = aiohttp.TCPConnector(limit=10) 
+    connector = aiohttp.TCPConnector(limit=10)
     session = aiohttp.ClientSession(connector=connector)
 
     monitor_task = asyncio.create_task(monitor_tasks())
     print(f"[{datetime.utcnow()}] Bot started and monitoring active")
+    print(f"[{datetime.utcnow()}] Telegram fallback: {'ENABLED' if FALLBACK_ENABLED else 'DISABLED'}")
     worker_task = asyncio.create_task(discord_worker())
+    gmail_task = asyncio.create_task(gmail_poller())
 
     try:
         await bot.delete_webhook(drop_pending_updates=True)
@@ -656,6 +735,7 @@ async def main():
     finally:
         monitor_task.cancel()
         worker_task.cancel()
+        gmail_task.cancel()
         await session.close()
         print(f"[{datetime.utcnow()}] Bot stopped, session closed")
 
