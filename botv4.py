@@ -697,17 +697,8 @@ async def gmail_poller():
         try:
             emails = await asyncio.to_thread(_fetch_unseen_emails_sync)
             for uid, subject in emails:
-                if uid in open_tasks:
-                    continue
-                now = datetime.utcnow()
-                title = f"{subject}"
-                open_tasks[uid] = {
-                    "title": title,
-                    "opened_at": now,
-                    "notifications_sent": [],
-                }
-                await discord_queue.put(f"{title}")
-                print(f"[{now}] Gmail violation queued: uid={uid} subject={subject!r}")
+                await discord_queue.put(subject)
+                print(f"[{datetime.utcnow()}] Gmail violation queued: uid={uid} subject={subject!r}")
         except Exception as e:
             err = f"[{datetime.utcnow()}] Gmail poller error: {type(e).__name__}: {e}"
             print(err)
